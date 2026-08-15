@@ -1,5 +1,5 @@
 """
-CLI interface for Qwen Sandbox
+CLI interface for Qwen Sandbox with Qwen Coder API integration
 """
 
 import click
@@ -11,9 +11,9 @@ from .sandbox import CodeSandbox
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.2.0")
 def cli():
-    """Qwen Sandbox CLI - Safe code execution with Qwen account authentication"""
+    """Qwen Sandbox CLI - Safe code execution with Qwen Coder API"""
     pass
 
 
@@ -21,7 +21,7 @@ def cli():
 @click.option('--username', '-u', default=None, help='Qwen account username/email')
 @click.option('--password', '-p', default=None, help='Qwen account password')
 def login(username: str, password: str):
-    """Login with Qwen account credentials"""
+    """Login with Qwen account credentials to get API token"""
     auth = QwenAuth()
     
     # If credentials not provided via options, prompt for them
@@ -30,7 +30,7 @@ def login(username: str, password: str):
     if not password:
         password = click.prompt('Password', hide_input=True)
     
-    click.echo("Authenticating with Qwen...")
+    click.echo("Authenticating with Qwen Coder API...")
     result = auth.login(username, password)
     
     if result.get("success"):
@@ -38,6 +38,7 @@ def login(username: str, password: str):
         click.echo(click.style(f"✓ Login successful! Welcome, {user_info.get('username', 'User')}", fg='green'))
         click.echo(f"  User ID: {user_info.get('id')}")
         click.echo(f"  Session expires: {result.get('expires_at', 'N/A')}")
+        click.echo(f"  API Endpoint: {auth.api_url}")
     else:
         error = result.get("error", "Unknown error")
         click.echo(click.style(f"✗ Login failed: {error}", fg='red'))
@@ -66,6 +67,7 @@ def status():
         click.echo(click.style("✓ Authenticated", fg='green'))
         click.echo(f"  Username: {user_info.get('username', 'Unknown')}")
         click.echo(f"  User ID: {user_info.get('id', 'Unknown')}")
+        click.echo(f"  API Endpoint: {auth.api_url}")
     else:
         click.echo(click.style("✗ Not authenticated", fg='red'))
         click.echo("  Use 'qwen-sandbox login' to authenticate")
@@ -74,8 +76,9 @@ def status():
 @cli.command()
 @click.option('--code', '-c', default=None, help='Code to execute')
 @click.option('--file', '-f', type=click.File('r'), help='File containing code to execute')
-@click.option('--language', '-l', default='python', help='Programming language (default: python)')
-def run(code: Optional[str], file, language: str):
+@click.option('--api/--local', default=False, help='Use Qwen Coder API instead of local execution')
+@click.option('--model', '-m', default='qwen-turbo', help='Qwen model to use (for API mode)')
+def run(code: Optional[str], file, api: bool, model: str):
     """Execute code in the sandbox"""
     auth = QwenAuth()
     
@@ -95,9 +98,16 @@ def run(code: Optional[str], file, language: str):
         click.echo("Use --code or --file to provide code")
         sys.exit(1)
     
+    # Get auth token for API mode
+    auth_token = auth.get_token() if api else None
+    
     # Execute code
-    sandbox = CodeSandbox()
-    result = sandbox.execute(code_to_run)
+    sandbox = CodeSandbox(
+        api_url=auth.api_url if api else None,
+        auth_token=auth_token,
+        timeout=30
+    )
+    result = sandbox.execute(code_to_run, use_api=api)
     
     # Display results
     if result["output"]:
@@ -110,8 +120,9 @@ def run(code: Optional[str], file, language: str):
 
 
 @cli.command()
-@click.option('--model', '-m', default='qwen-turbo', help='Qwen model to use')
-def interactive(model: str):
+@click.option('--api/--local', default=False, help='Use Qwen Coder API instead of local execution')
+@click.option('--model', '-m', default='qwen-turbo', help='Qwen model to use (for API mode)')
+def interactive(api: bool, model: str):
     """Start interactive mode"""
     auth = QwenAuth()
     
@@ -122,11 +133,19 @@ def interactive(model: str):
         sys.exit(1)
     
     user_info = auth.get_user_info()
-    click.echo(click.style(f"Welcome to Qwen Sandbox Interactive Mode, {user_info.get('username')}!", fg='cyan'))
+    mode_str = "API Mode" if api else "Local Mode"
+    click.echo(click.style(f"Welcome to Qwen Sandbox Interactive Mode ({mode_str}), {user_info.get('username')}!", fg='cyan'))
     click.echo("Type 'exit' or 'quit' to exit, 'clear' to clear screen")
     click.echo("-" * 60)
     
-    sandbox = CodeSandbox()
+    # Get auth token for API mode
+    auth_token = auth.get_token() if api else None
+    
+    sandbox = CodeSandbox(
+        api_url=auth.api_url if api else None,
+        auth_token=auth_token,
+        timeout=30
+    )
     
     while True:
         try:
@@ -144,7 +163,7 @@ def interactive(model: str):
                 continue
             
             # Execute code
-            result = sandbox.execute(code)
+            result = sandbox.execute(code, use_api=api)
             
             # Display results
             if result["output"]:

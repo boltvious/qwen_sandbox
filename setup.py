@@ -5,9 +5,9 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="qwen-sandbox",
-    version="0.1.0",
+    version="0.2.0",
     author="Qwen Sandbox Team",
-    description="CLI sandbox with Qwen account authentication",
+    description="CLI sandbox with Qwen Coder API integration and token-based authentication",
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=find_packages(),

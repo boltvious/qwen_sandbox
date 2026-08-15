@@ -1,5 +1,5 @@
 """
-Sandbox module for safe code execution
+Sandbox module for safe code execution with Qwen Coder API
 """
 
 import ast
@@ -8,6 +8,8 @@ import io
 import contextlib
 from typing import Dict, Any, Optional
 
+import requests
+
 
 class SandboxExecutionError(Exception):
     """Custom exception for sandbox execution errors"""
@@ -15,7 +17,7 @@ class SandboxExecutionError(Exception):
 
 
 class CodeSandbox:
-    """Safe code execution sandbox"""
+    """Safe code execution sandbox with Qwen Coder API integration"""
     
     # Restricted built-ins that cannot be used in sandboxed code
     RESTRICTED_BUILTINS = {
@@ -24,26 +26,34 @@ class CodeSandbox:
         'getattr', 'setattr', 'delattr', 'hasattr'
     }
     
-    def __init__(self, timeout: int = 30):
+    def __init__(self, api_url: str = None, auth_token: str = None, timeout: int = 30):
         """
         Initialize the sandbox
         
         Args:
+            api_url: Qwen Coder API endpoint URL
+            auth_token: Authentication token for API requests
             timeout: Maximum execution time in seconds
         """
+        self.api_url = api_url or "https://coder.qwen.ai/coder/api/v2/task/completions"
+        self.auth_token = auth_token
         self.timeout = timeout
     
-    def execute(self, code: str, globals_dict: Optional[Dict] = None) -> Dict[str, Any]:
+    def execute(self, code: str, globals_dict: Optional[Dict] = None, use_api: bool = False) -> Dict[str, Any]:
         """
         Execute code in a sandboxed environment
         
         Args:
             code: Python code to execute
             globals_dict: Optional global variables dictionary
+            use_api: If True, send code to Qwen Coder API instead of local execution
             
         Returns:
             dict: Execution result with output, error, and status
         """
+        if use_api and self.auth_token:
+            return self._execute_via_api(code)
+        
         try:
             # Validate code safety
             self._validate_code(code)
@@ -75,6 +85,70 @@ class CodeSandbox:
                 "success": False,
                 "output": "",
                 "error": f"Sandbox Error: {str(e)}",
+                "exit_code": 1
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "output": "",
+                "error": f"Execution Error: {str(e)}",
+                "exit_code": 1
+            }
+    
+    def _execute_via_api(self, code: str) -> Dict[str, Any]:
+        """
+        Execute code via Qwen Coder API
+        
+        Args:
+            code: Python code to execute
+            
+        Returns:
+            dict: Execution result from API
+        """
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": "Qwen-Sandbox-CLI/0.1.0"
+            }
+            
+            if self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+            
+            payload = {
+                "code": code,
+                "language": "python",
+                "timeout": self.timeout
+            }
+            
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout + 10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "success": True,
+                    "output": data.get("output", data.get("result", "")),
+                    "error": data.get("error", ""),
+                    "exit_code": 0
+                }
+            else:
+                error_data = response.json() if response.content else {}
+                return {
+                    "success": False,
+                    "output": "",
+                    "error": f"API Error: {error_data.get('message', f'HTTP {response.status_code}')}",
+                    "exit_code": 1
+                }
+                
+        except requests.exceptions.RequestException as e:
+            return {
+                "success": False,
+                "output": "",
+                "error": f"Network Error: {str(e)}",
                 "exit_code": 1
             }
         except Exception as e:
