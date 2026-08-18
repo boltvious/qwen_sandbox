@@ -1,5 +1,0 @@
-codercode "Coba cek file client.py, ada potensi bug di handling cookie-nya nggak? Kalau ada, kasih solusinya."
-
-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
-
-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
