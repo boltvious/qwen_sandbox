@@ -1,14 +1,1 @@
-@"
-venv/
-__pycache__/
-*.pyc
-*.egg-info/
-.qwen_auth.json
-.qwen_trust.json
-.coder_session.json
-.coder_cache.json
-.endpoint_cache.json
-.session.json
-.github_token
-.env
-"@ | Set-Content .gitignore
+(auth_store.py and client.py are source files, no build artifacts, dependencies, or temp files detected in the changes)

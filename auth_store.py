@@ -5,6 +5,7 @@ import json
 import os
 import base64
 import time
+import httpx
 from datetime import datetime
 
 from rich.console import Console
@@ -33,10 +34,12 @@ def _quick_profile(cookies: dict) -> dict:
         ("https://coder.qwen.ai", "/coder/api/v2/auths/"),
         ("https://chat.qwen.ai", "/api/v2/auths/"),
     ]
+    # Hanya kirim token di header, jangan di cookies untuk keamanan
+    safe_cookies = {"token": cookies.get("token", "")} if "token" in cookies else {}
     for base, path in targets:
         try:
             r = httpx.get(base + path, headers=headers,
-                          cookies=cookies, timeout=15)
+                          cookies=safe_cookies, timeout=15)
             if r.status_code == 200:
                 data = r.json().get("data", {})
                 if isinstance(data, dict) and (data.get("email") or data.get("name")):

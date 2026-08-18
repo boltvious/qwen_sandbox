@@ -1,6 +1,7 @@
 # client.py
 from __future__ import annotations
 
+import os
 import httpx
 from rich.console import Console
 
@@ -8,23 +9,14 @@ from auth import extract_cookies, to_simple_cookie_dict
 
 console = Console()
 
-BASE_URL = "https://chat.qwen.ai"
+BASE_URL = os.getenv("QWEN_BASE_URL", "https://chat.qwen.ai")
 
 CANDIDATE_PREFIXES = ["/api/v2", "/api/v1", "/api", ""]
 
-BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "id,en-US;q=0.9,en;q=0.8",
-    "Origin": BASE_URL,
-    "Referer": f"{BASE_URL}/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-}
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+)
 
 
 def build_client() -> httpx.Client:
@@ -45,10 +37,7 @@ def build_client() -> httpx.Client:
     # 3) Headers browser-like (Origin/Referer per-request
     #    di-override oleh extra_headers() masing-masing CLI)
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
-        ),
+        "User-Agent": USER_AGENT,
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "id,en-US;q=0.9,en;q=0.8",
         "Sec-Fetch-Dest": "empty",
@@ -56,13 +45,20 @@ def build_client() -> httpx.Client:
         "Sec-Fetch-Site": "same-origin",
     }
 
-    # 4) Jurus ninja token ganda
+    # 4) Token hanya di header Authorization (lebih aman)
     headers["Authorization"] = f"Bearer {cookie_dict['token']}"
-    console.print("[green]🗝️ Token dipasang sebagai cookie + Bearer header.[/green]")
+    console.print("[green]🗝️ Token dipasang sebagai Bearer header.[/green]")
+
+    # Filter cookie: jangan kirim semua cookie, cukup yang esensial saja
+    # untuk menghindari kebocoran data sensitif
+    safe_cookies = {}
+    for key in ["_bl_uid", "locale"]:  # contoh cookie non-sensitif
+        if key in cookie_dict:
+            safe_cookies[key] = cookie_dict[key]
 
     return httpx.Client(
         headers=headers,
-        cookies=cookie_dict,
+        cookies=safe_cookies if safe_cookies else None,
         timeout=30,
         follow_redirects=True,
     )
