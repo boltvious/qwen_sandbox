@@ -31,7 +31,7 @@ MAX_FILE_CHARS = 100_000
 # Taruh di atas, setelah import
 DEFAULT_ENV_ID = "381f04eb-56b9-44dc-a863-882b27824fea"
 DEFAULT_REPO = {
-    "repository": "boltvious/qwen_sandbox",
+    "repository": f"https://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@github.com/boltvious/qwen_sandbox.git",
     "git_provider": "github",
     "selected_branch": "main"
 }
@@ -396,8 +396,6 @@ def build_payload(prompt: str, model: str, chat_id: str, parent_id=None, env_id=
     }
 
 
-
-
 def extract_delta(obj):
     """Ekstrak text/thinking dari chunk SSE."""
     if not isinstance(obj, dict):
@@ -427,7 +425,6 @@ def extract_delta(obj):
     thinking = thinking or _first_str(obj, "reasoning_content", "thinking")
 
     return text, thinking
-
 
 # ---------- Streaming ----------
 
