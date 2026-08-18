@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwen-coder-cli"
+version = "0.2.0"
+description = "Ninja CLI for Qwen — personal use only"
+requires-python = ">=3.10"
+dependencies = [
+  "rookiepy",
+  "httpx",
+  "rich",
+]
+
+[project.scripts]
+qwen-cli  = "chat:main"        # platform chat.qwen.ai
+codercode = "coder_cli:main"   # platform coder.qwen.ai
+
+[tool.setuptools]
+py-modules = ["auth", "client", "chat", "coder_cli", "auth_store"]

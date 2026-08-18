@@ -1,0 +1,13 @@
+@"
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.qwen_auth.json
+.qwen_trust.json
+.coder_session.json
+.coder_cache.json
+.endpoint_cache.json
+.session.json
+.env
+"@ | Set-Content .gitignore
