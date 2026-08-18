@@ -31,7 +31,7 @@ MAX_FILE_CHARS = 100_000
 # Taruh di atas, setelah import
 DEFAULT_ENV_ID = "381f04eb-56b9-44dc-a863-882b27824fea"
 DEFAULT_REPO = {
-    "repository": f"https://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@github.com/boltvious/qwen_sandbox.git",
+    "repository": "boltvious/qwen_sandbox",
     "git_provider": "github",
     "selected_branch": "main"
 }
@@ -49,6 +49,43 @@ KEY_FILES = [
 MAX_TREE_LINES = 150
 MAX_KEY_FILE_CHARS = 6000
 
+# ---------- GitHub Token Management ----------
+GITHUB_TOKEN_FILE = os.path.join(SCRIPT_DIR, ".github_token")
+
+
+def get_github_token(args) -> str | None:
+    """Ambil GitHub PAT dari: args → env → file lokal."""
+    # 1) Argumen CLI
+    if hasattr(args, "github_token") and args.github_token:
+        return args.github_token.strip()
+    # 2) Environment variable
+    env_tok = os.getenv("GITHUB_TOKEN")
+    if env_tok:
+        return env_tok.strip()
+    # 3) File lokal
+    if os.path.exists(GITHUB_TOKEN_FILE):
+        try:
+            with open(GITHUB_TOKEN_FILE) as f:
+                tok = f.read().strip()
+            if tok:
+                return tok
+        except Exception:
+            pass
+    return None
+
+
+def inject_token_to_repo_url(repo: str, token: str) -> str:
+    """Inject PAT ke URL git HTTPS supaya sandbox bisa clone repo private."""
+    # Format modern GitHub: https://x-access-token:<token>@github.com/...
+    if repo.startswith("https://"):
+        # Ganti https://github.com/owner/repo → https://x-access-token:TOKEN@github.com/owner/repo
+        return repo.replace("https://", f"https://x-access-token:{token}@", 1)
+    if repo.startswith("git@github.com:"):
+        # Convert SSH → HTTPS with token
+        path = repo.replace("git@github.com:", "")
+        return f"https://x-access-token:{token}@github.com/{path}"
+    # Fallback: anggap owner/repo
+    return f"https://x-access-token:{token}@github.com/{repo}.git"
 
 def scan_project(root=".", max_depth=3):
     """Return (tree_text, list_key_file_paths)."""
@@ -357,7 +394,12 @@ def build_final_prompt(prompt, files_ctx, stdin_text):
 
 # Di build_payload(), tambahkan env & meta ke root payload:
 def build_payload(prompt: str, model: str, chat_id: str, parent_id=None, env_id=None, repo_info=None) -> dict:
-    env_config = get_env_config(client=None, env_id=env_id, repo_info=repo_info)
+    meta = env_config["meta"].copy()
+    if github_token and "repo_info" in meta:
+        repo_info = meta["repo_info"].copy()
+        original_repo = repo_info.get("repository", "")
+        repo_info["repository"] = inject_token_to_repo_url(original_repo, github_token)
+        meta["repo_info"] = repo_info
     ts = int(time.time())
     fid = str(uuid.uuid4())
     child = str(uuid.uuid4())
@@ -373,7 +415,7 @@ def build_payload(prompt: str, model: str, chat_id: str, parent_id=None, env_id=
         "chat_mode": "normal",
         "model": model or DEFAULT_MODEL,
         "env_id": env_config["env_id"],  # <-- INI KUNCI NYA
-        "meta": env_config["meta"],
+        "meta": meta,
         "messages": [{
             "id": None,
             "fid": fid,
@@ -597,45 +639,58 @@ def ask(client, full_prompt, model, args):
         return False
 
     current_prompt = full_prompt
-    max_loops = 3  # Batas maksimal AI minta file (biar nggak infinite loop)
+    max_loops = 3
+    last_text = None  # Track teks terakhir buat save session
+
+    # Ambil token SEKALI di luar loop (nggak perlu tiap iterasi)
+    gh_token = get_github_token(args)
+    if gh_token and args.git:
+        console.print("[dim]🔑 GitHub token di-inject ke repo URL.[/dim]")
+        console.print("[yellow]⚠ Token akan masuk ke payload API (server Qwen). "
+                      "Pakai token expire pendek & revoke setelah uji coba.[/yellow]")
 
     for loop_count in range(max_loops):
         console.print(Panel.fit(
             f"[bold cyan]Qwen Coder CLI (coder.qwen.ai)[/bold cyan]\n"
-            f"model: [green]{model or DEFAULT_MODEL}[/green] | chat: [dim]{chat_id[:8]}â€¦{chat_id[-4:]}[/dim]",
+            f"model: [green]{model or DEFAULT_MODEL}[/green] | chat: [dim]{chat_id[:8]}…{chat_id[-4:]}[/dim]",
             border_style="cyan",
         ))
 
-        payload = build_payload(current_prompt, model, chat_id, parent_id)
+        # Rebuild payload tiap iterasi (current_prompt berubah)
+        payload = build_payload(current_prompt, model, chat_id, parent_id,
+                                github_token=gh_token)
         endpoint = "/coder/api/v2/task/completions"
 
         if loop_count == 0:
-            console.print(f"[yellow]âžœ POST[/yellow] {_url(endpoint)}")
-        
+            console.print(f"[yellow]➜ POST[/yellow] {_url(endpoint)}")
+
         status, text, extra, fatal, new_response_id = stream_chat(
             client, endpoint, payload, raw=args.raw, pretty=not args.plain
         )
 
         if fatal or status != 200:
-            console.print(f"[red]âœ— Error: {extra}[/red]")
+            console.print(f"[red]✗ Error: {extra}[/red]")
             return False
 
-        # ðŸ”¥ AGENTIC LOOP DETECTOR ðŸ”¥
-        # Cek apakah AI minta baca file pakai tag <read_file>
-        match = re.search(r'<read_file>(.*?)</read_file>', text or "", re.IGNORECASE | re.DOTALL)
-        
+        # Simpan text terakhir buat save session
+        if text:
+            last_text = text
+
+        # 🔥 AGENTIC LOOP DETECTOR 🔥
+        match = re.search(r'<read_file>(.*?)</read_file>', text or "",
+                          re.IGNORECASE | re.DOTALL)
+
         if not match:
-            # AI udah selesai jawab, nggak minta file lagi. Break loop.
+            # AI selesai, nggak minta file lagi
             break
 
         filename = match.group(1).strip()
-        console.print(f"\n[bold yellow]ðŸ¤– AI minta akses baca: [cyan]{filename}[/cyan][/bold yellow]")
-        
+        console.print(f"\n[bold yellow]🤖 AI minta akses baca: [cyan]{filename}[/cyan][/bold yellow]")
+
         try:
             with open(filename, "r", encoding="utf-8") as f:
                 content = f.read()
-            
-            # Siapkan prompt balasan buat AI (Tool Response)
+
             current_prompt = (
                 f"<tool_response>\n"
                 f"Here is the content of {filename}:\n\n"
@@ -643,20 +698,22 @@ def ask(client, full_prompt, model, args):
                 f"</tool_response>\n\n"
                 f"Continue your previous task based on this new file."
             )
-            # Update parent_id biar nyambung ke response AI sebelumnya
             parent_id = new_response_id or parent_id
-            console.print(f"[green]âœ… File {filename} berhasil dibaca & dikirim balik ke AI...[/green]\n")
-            
+            console.print(f"[green]✅ File {filename} berhasil dibaca & dikirim balik ke AI...[/green]\n")
+
         except Exception as e:
             current_prompt = f"<tool_response>Error reading {filename}: {e}</tool_response>"
             parent_id = new_response_id or parent_id
 
     # Save session terakhir
-    if text:
+    if last_text:
         save_session(chat_id, new_response_id or parent_id)
-        console.print(f"\n[bold green]âœ… DONE[/bold green] [dim]({endpoint})[/dim]")
-        console.print(f"[dim]ðŸ”— pantau di web: {BASE_URL}/c/{chat_id}[/dim]")
+        console.print(f"\n[bold green]✅ DONE[/bold green] [dim]({endpoint})[/dim]")
+        console.print(f"[dim]🔗 pantau di web: {BASE_URL}/c/{chat_id}[/dim]")
         return True
+
+    return False
+    
 def repl(client, args):
     console.print(Panel.fit(
         "[bold cyan]codercode â€” interactive mode[/bold cyan]\n"
@@ -703,7 +760,18 @@ def main():
                 help="Git mode: AI baca kode langsung dari sandbox repo (hemat token)")
     ap.add_argument("--push", action="store_true",
                 help="(bareng --git) auto push dulu biar sandbox dapet kode terbaru")
+    ap.add_argument("--github-token", default=None,
+                help="GitHub Personal Access Token (atau set GITHUB_TOKEN env)")
+    ap.add_argument("--save-token", action="store_true",
+                help="Simpan --github-token ke file lokal .github_token")
     args = ap.parse_args()
+
+        # Handle save GitHub token
+    if args.save_token and args.github_token:
+        with open(GITHUB_TOKEN_FILE, "w") as f:
+            f.write(args.github_token.strip())
+        os.chmod(GITHUB_TOKEN_FILE, 0o600)  # read/write only owner
+        console.print(f"[green]✅ GitHub token tersimpan di {os.path.basename(GITHUB_TOKEN_FILE)}[/green]")
 
     stdin_text = "" if sys.stdin.isatty() else sys.stdin.buffer.read().decode("utf-8", errors="replace").strip()
 
@@ -752,3 +820,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -9,5 +9,6 @@ __pycache__/
 .coder_cache.json
 .endpoint_cache.json
 .session.json
+.github_token
 .env
 "@ | Set-Content .gitignore
