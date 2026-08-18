@@ -393,13 +393,24 @@ def build_final_prompt(prompt, files_ctx, stdin_text):
 # ---------- Payload Builder ----------
 
 # Di build_payload(), tambahkan env & meta ke root payload:
-def build_payload(prompt: str, model: str, chat_id: str, parent_id=None, env_id=None, repo_info=None) -> dict:
-    meta = env_config["meta"].copy()
-    if github_token and "repo_info" in meta:
-        repo_info = meta["repo_info"].copy()
-        original_repo = repo_info.get("repository", "")
-        repo_info["repository"] = inject_token_to_repo_url(original_repo, github_token)
-        meta["repo_info"] = repo_info
+def build_payload(prompt: str, model: str, chat_id: str, parent_id=None,
+                  environment_id=None, github_token=None) -> dict:
+    """Bangun payload sesuai format coder.qwen.ai."""
+    
+    # Default environment & repo config
+    if environment_id is None:
+        environment_id = DEFAULT_ENV_ID
+    
+    repo_info = DEFAULT_REPO.copy()
+    
+    # Inject GitHub token ke repo URL kalau ada
+    if github_token:
+        repo_url = repo_info.get("repository", "")
+        if repo_url.startswith("https://"):
+            repo_info["repository"] = repo_url.replace(
+                "https://", f"https://x-access-token:{github_token}@", 1
+            )
+    
     ts = int(time.time())
     fid = str(uuid.uuid4())
     child = str(uuid.uuid4())
@@ -414,12 +425,15 @@ def build_payload(prompt: str, model: str, chat_id: str, parent_id=None, env_id=
         "parent_id": parent_id,
         "chat_mode": "normal",
         "model": model or DEFAULT_MODEL,
-        "env_id": env_config["env_id"],  # <-- INI KUNCI NYA
-        "meta": meta,
+        "environment_id": environment_id,
+        "meta": {
+            "repo_info": repo_info,
+            "env_info": {"env_name": "qwen_sandbox"}
+        },
         "messages": [{
             "id": None,
             "fid": fid,
-            "parentId": None,
+            "parentId": parent_id,
             "childrenIds": [child],
             "role": "user",
             "content": prompt,
@@ -429,14 +443,16 @@ def build_payload(prompt: str, model: str, chat_id: str, parent_id=None, env_id=
             "models": [model or DEFAULT_MODEL],
             "model": "",
             "chat_type": "code",
-            "feature_config": {"thinking_enabled": False, "output_schema": "phase"},
+            "feature_config": {
+                "thinking_enabled": False,
+                "output_schema": "phase",
+            },
             "extra": {"meta": {"subChatType": "code"}},
             "sub_chat_type": "code",
             "parent_id": parent_id,
         }],
         "timestamp": ts,
     }
-
 
 def extract_delta(obj):
     """Ekstrak text/thinking dari chunk SSE."""
