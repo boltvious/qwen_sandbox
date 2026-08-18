@@ -224,16 +224,30 @@ def _deep_get(obj, keys):
 # ---------- Session Management ----------
 
 def load_session():
+    """Load chat_id & parent_id dari file session."""
     try:
-        with open(SESSION_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return None
+        with open(SESSION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            chat_id = data.get("chat_id")
+            parent_id = data.get("parent_id")
+            # Validasi: chat_id harus string yang mirip UUID (min 32 char)
+            if isinstance(chat_id, str) and len(chat_id) >= 32:
+                return chat_id, parent_id
+    except Exception as e:
+        console.print(f"[dim]⚠ Session file corrupt: {e}[/dim]")
+    return None, None
 
 
-def save_session(chat_id, parent_id):
-    with open(SESSION_FILE, "w") as f:
-        json.dump({"chat_id": chat_id, "parent_id": parent_id}, f)
+def save_session(chat_id, parent_id=None):
+    """Simpan chat_id & parent_id ke file session."""
+    if not chat_id:
+        return
+    try:
+        with open(SESSION_FILE, "w", encoding="utf-8") as f:
+            json.dump({"chat_id": chat_id, "parent_id": parent_id}, f, indent=2)
+    except Exception as e:
+        console.print(f"[yellow]⚠ Gagal simpan session: {e}[/yellow]")
 
 
 def reset_session():
@@ -319,33 +333,42 @@ def get_latest_chat_id(client):
 
 
 def ensure_chat(client, wanted_id=None):
-    """Pastikan kita punya chat_id yang valid."""
+    """Pastikan ada chat_id valid untuk dipakai. Return (chat_id, parent_id)."""
+    
+    # 1. Kalau user kasih --chat-id, pakai itu + simpan ke session
     if wanted_id:
+        console.print(f"[cyan]📌 Pin chat dari --chat-id: {wanted_id[:8]}…{wanted_id[-4:]}[/cyan]")
+        # Verifikasi chat valid di server
         obj = get_chat(client, wanted_id)
         parent = _deep_get(obj, {"currentId", "current_id", "current_node"}) if obj else None
+        save_session(wanted_id, parent)
         return wanted_id, parent
 
-    # Coba ambil chat terbaru dari web
-    latest = get_latest_chat_id(client)
+    # 2. Coba load dari session file (yang baru aja kita fix)
+    saved_chat, saved_parent = load_session()
+    if saved_chat:
+        console.print(f"[cyan]📎 Pakai session tersimpan: {saved_chat[:8]}…{saved_chat[-4:]}[/cyan]")
+        # Verifikasi chat masih valid di server
+        obj = get_chat(client, saved_chat)
+        if obj:
+            parent = _deep_get(obj, {"currentId", "current_id", "current_node"})
+            return saved_chat, parent or saved_parent
+        else:
+            console.print(f"[yellow]⚠ Session {saved_chat[:8]} sudah invalid, reset...[/yellow]")
+            reset_session()
+
+    # 3. Coba ambil chat terbaru dari server (via GET /chats)
+    latest, parent = get_latest_valid_chat(client)
     if latest:
-        console.print(f"[cyan]ðŸ“Ž Numpang di chat terbaru (coder):[/cyan] {latest[:8]}â€¦")
-        obj = get_chat(client, latest)
-        parent = _deep_get(obj, {"currentId", "current_id", "current_node"}) if obj else None
+        console.print(f"[cyan]📎 Pakai chat terbaru dari server: {latest[:8]}…{latest[-4:]}[/cyan]")
+        save_session(latest, parent)
         return latest, parent
 
-    # Coba buat chat baru
-    chat_id = str(uuid.uuid4())
-    if create_chat(client, chat_id):
-        if get_chat(client, chat_id) is not None:
-            console.print(f"[green]ðŸ“ Chat baru dibuat (coder):[/green] {chat_id[:8]}â€¦")
-            return chat_id, None
-
-    # Fallback
-    console.print("[yellow]âš  Nggak ada history & gagal create via API.[/yellow]")
-    console.print("[cyan]ðŸ’¡ Buka coder.qwen.ai, kirim 1 pesan manual, lalu coba lagi.[/cyan]")
+    # 4. Fallback: kasih instruksi manual
+    console.print("[yellow]⚠ Nggak ada chat valid.[/yellow]")
+    console.print("[cyan]💡 Buka coder.qwen.ai, buat chat baru (pilih Python), kirim 1 pesan.[/cyan]")
+    console.print("[cyan]💡 Lalu jalankan: codercode --chat-id <ID_DARI_URL>[/cyan]")
     return None, None
-
-
 # ---------- File Context ----------
 
 def read_context_files(paths):
@@ -393,24 +416,8 @@ def build_final_prompt(prompt, files_ctx, stdin_text):
 # ---------- Payload Builder ----------
 
 # Di build_payload(), tambahkan env & meta ke root payload:
-def build_payload(prompt: str, model: str, chat_id: str, parent_id=None,
-                  environment_id=None, github_token=None) -> dict:
-    """Bangun payload sesuai format coder.qwen.ai."""
-    
-    # Default environment & repo config
-    if environment_id is None:
-        environment_id = DEFAULT_ENV_ID
-    
-    repo_info = DEFAULT_REPO.copy()
-    
-    # Inject GitHub token ke repo URL kalau ada
-    if github_token:
-        repo_url = repo_info.get("repository", "")
-        if repo_url.startswith("https://"):
-            repo_info["repository"] = repo_url.replace(
-                "https://", f"https://x-access-token:{github_token}@", 1
-            )
-    
+def build_payload(prompt, model, chat_id, parent_id=None,
+                  github_token=None, branch="main") -> dict:
     ts = int(time.time())
     fid = str(uuid.uuid4())
     child = str(uuid.uuid4())
@@ -425,15 +432,12 @@ def build_payload(prompt: str, model: str, chat_id: str, parent_id=None,
         "parent_id": parent_id,
         "chat_mode": "normal",
         "model": model or DEFAULT_MODEL,
-        "environment_id": environment_id,
-        "meta": {
-            "repo_info": repo_info,
-            "env_info": {"env_name": "qwen_sandbox"}
-        },
+        # ❌ HAPUS: "environment_id": environment_id,
+        # ❌ HAPUS: "meta": {...}
         "messages": [{
             "id": None,
             "fid": fid,
-            "parentId": parent_id,
+            "parentId": parent_id,  # ← Penting buat session continuity!
             "childrenIds": [child],
             "role": "user",
             "content": prompt,
