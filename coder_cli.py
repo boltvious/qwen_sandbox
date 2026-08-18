@@ -19,6 +19,9 @@ from rich.prompt import Prompt
 # Import dari client.py yang udah ada (cookie extractor)
 from client import build_client
 
+# Import push handler untuk mekanisme push dengan konfirmasi
+from push_handler import handle_git_push, PushRequestHandler
+
 console = Console()
 
 BASE_URL = "https://coder.qwen.ai"
@@ -784,6 +787,8 @@ def main():
                 help="GitHub Personal Access Token (atau set GITHUB_TOKEN env)")
     ap.add_argument("--save-token", action="store_true",
                 help="Simpan --github-token ke file lokal .github_token")
+    ap.add_argument("--commit-message", "-m", default="codercode sync",
+                help="Pesan commit untuk git push (default: codercode sync)")
     args = ap.parse_args()
 
         # Handle save GitHub token
@@ -798,12 +803,11 @@ def main():
     if args.new:
         reset_session()
 
+    # Handle git push dengan mekanisme konfirmasi user
     if args.git and args.push:
-        import subprocess
-        console.print("[cyan]ðŸ“¤ Sync lokal â†’ github...[/cyan]")
-        subprocess.run(["git", "add", "-A"])
-        subprocess.run(["git", "commit", "-m", "codercode sync", "--allow-empty"])
-        subprocess.run(["git", "push"])
+        success = handle_git_push(args, branch="main")
+        if not success:
+            console.print("[yellow]⚠ Push dibatalkan atau gagal, lanjut tanpa push...[/yellow]")
 
     prompt = " ".join(args.prompt)
     if not prompt and not stdin_text:
